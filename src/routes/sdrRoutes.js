@@ -61,6 +61,8 @@ router.post('/lbs/process', sdrController.processLBS);
 router.post('/import', upload.single('file'), sdrController.importSDR);
 // LBS to SDR Lookup
 router.post('/lbs/lookup', sdrController.lookupSDRFromLBS);
+// LBS Components Lookup
+router.post('/lbs/lookup-components', sdrController.lookupSDRByComponents);
 router.get('/search', sdrController.searchSDR);
 router.get('/all', sdrController.getAllSDR);
 router.get('/mobile/:mobile', sdrController.getByMobile);

@@ -702,7 +702,203 @@ class SDRService {
         const [rows] = await promiseSdrPool.query(sql, params);
         return rows;
     }
+// Lookup SDR by LBS components
+async lookupSDRByComponents(components) {
+    try {
+        console.log('Looking up SDR with components:', components);
+        
+        // Extract and normalize mobile number
+        const mobileNumber = this.normalizeMobileNumber(components.MOB);
+        const imsi = components.IMSI;
+        const imei = components.IMEI;
+        
+        // Get current timestamp for location
+        const locationTime = components.L_Act || new Date().toISOString();
+        
+        // Initialize pools
+        const pools = await this.initPools();
+        const promiseSdrPool = pools.promiseSdrPool;
+        
+        let sdrData = null;
+        let searchMethod = '';
 
+        // Try to find by mobile number first
+        if (mobileNumber) {
+            // Try exact match
+            const [rows] = await promiseSdrPool.query(
+                'SELECT * FROM sdr_records WHERE mobile_number = ?',
+                [mobileNumber]
+            );
+            
+            if (rows.length > 0) {
+                sdrData = rows[0];
+                searchMethod = 'mobile_number_exact';
+            } else {
+                // Try with last 10 digits
+                const last10Digits = mobileNumber.slice(-10);
+                const [rows10] = await promiseSdrPool.query(
+                    'SELECT * FROM sdr_records WHERE mobile_number LIKE ?',
+                    [`%${last10Digits}`]
+                );
+                if (rows10.length > 0) {
+                    sdrData = rows10[0];
+                    searchMethod = 'mobile_number_last10';
+                }
+            }
+        }
+
+        // If not found, try by IMSI
+        if (!sdrData && imsi) {
+            const [rows] = await promiseSdrPool.query(
+                'SELECT * FROM sdr_records WHERE imsi = ?',
+                [imsi]
+            );
+            if (rows.length > 0) {
+                sdrData = rows[0];
+                searchMethod = 'imsi';
+            }
+        }
+
+        // If not found, try by IMEI
+        if (!sdrData && imei) {
+            const [rows] = await promiseSdrPool.query(
+                'SELECT * FROM sdr_records WHERE imei = ?',
+                [imei]
+            );
+            if (rows.length > 0) {
+                sdrData = rows[0];
+                searchMethod = 'imei';
+            }
+        }
+
+        // Store LBS tracking data if subscriber found
+        if (sdrData) {
+            await promiseSdrPool.query(
+                `INSERT INTO lbs_tracking 
+                (mobile_number, imsi, imei, location_time, cgi, vlr, raw_message, sdr_id) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    sdrData.mobile_number,
+                    sdrData.imsi,
+                    sdrData.imei,
+                    this.parseDate(locationTime),
+                    components.CGI,
+                    components.VLR,
+                    JSON.stringify(components),
+                    sdrData.id
+                ]
+            );
+        }
+
+        // Prepare comprehensive response
+        const response = {
+            success: true,
+            timestamp: new Date().toISOString(),
+            search_method: searchMethod || 'not_found',
+            query_components: components,
+            
+            // Subscriber Details (if found)
+            subscriber: sdrData ? {
+                // Personal Information
+                mobile_number: sdrData.mobile_number,
+                first_name: sdrData.first_name,
+                last_name: sdrData.last_name,
+                full_name: `${sdrData.first_name || ''} ${sdrData.last_name || ''}`.trim(),
+                father_name: sdrData.father_name,
+                spouse_name: sdrData.spouse_name,
+                gender: sdrData.gender,
+                date_of_birth: sdrData.date_of_birth,
+                age: sdrData.date_of_birth ? this.calculateAge(sdrData.date_of_birth) : null,
+                nationality: sdrData.nationality,
+                
+                // Contact Information
+                alternate_contact: sdrData.alternate_contact,
+                email: sdrData.email,
+                
+                // Address Information
+                address: sdrData.address,
+                permanent_address: sdrData.permanent_address,
+                city: sdrData.city,
+                district: sdrData.district,
+                state: sdrData.state,
+                pin_code: sdrData.pin_code,
+                full_address: [sdrData.address, sdrData.city, sdrData.state, sdrData.pin_code]
+                    .filter(Boolean).join(', '),
+                
+                // Identification
+                id_type: sdrData.id_type,
+                id_number: sdrData.id_number,
+                
+                // Subscription Details
+                subscription_type: sdrData.subscription_type,
+                activation_date: sdrData.activation_date,
+                subscriber_status: sdrData.subscriber_status,
+                circle_code: sdrData.circle_code,
+                
+                // SIM Details
+                imsi: sdrData.imsi,
+                imei: sdrData.imei,
+                sim_type: sdrData.sim_type,
+                
+                // Network Information (from LBS)
+                current_network: {
+                    cgi: components.CGI,
+                    vlr: components.VLR,
+                    location_time: components.L_Act
+                },
+                
+                // Account Age
+                account_age_days: sdrData.activation_date ? 
+                    this.calculateDaysBetween(sdrData.activation_date, new Date()) : null,
+                
+                // Record Metadata
+                created_at: sdrData.created_at,
+                updated_at: sdrData.updated_at,
+                data_source: sdrData.data_source
+                
+            } : null,
+            
+            // Summary
+            summary: {
+                found: sdrData ? true : false,
+                message: sdrData ? 'Subscriber found in database' : 'No subscriber found with provided details',
+                search_criteria: {
+                    by_mobile: !!mobileNumber,
+                    by_imsi: !!imsi,
+                    by_imei: !!imei
+                }
+            }
+        };
+
+        return response;
+
+    } catch (error) {
+        console.error('Error in lookupSDRByComponents:', error);
+        throw error;
+    }
+}
+
+// Helper function to calculate age from date of birth
+calculateAge(dateOfBirth) {
+    if (!dateOfBirth) return null;
+    const today = new Date();
+    const birthDate = new Date(dateOfBirth);
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const m = today.getMonth() - birthDate.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+        age--;
+    }
+    return age;
+}
+
+// Helper function to calculate days between two dates
+calculateDaysBetween(startDate, endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const diffTime = Math.abs(end - start);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
+}
     // Get location history for a mobile number
     async getLocationHistory(mobileNumber, days = 7) {
         const { promiseSdrPool } = await this.initPools();

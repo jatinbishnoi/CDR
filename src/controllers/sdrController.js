@@ -394,7 +394,36 @@ class SDRController {
             });
         }
     }
+// Lookup SDR by LBS components
+async lookupSDRByComponents(req, res) {
+    try {
+        const components = req.body;
+        
+        // Validate required fields
+        if (!components.MOB && !components.IMSI && !components.IMEI) {
+            return res.status(400).json({
+                success: false,
+                error: 'At least one of MOB, IMSI, or IMEI is required'
+            });
+        }
 
+        const result = await sdrService.lookupSDRByComponents(components);
+        
+        // If not found, return 404 but still with the query components
+        if (!result.subscriber) {
+            return res.status(404).json(result);
+        }
+        
+        res.status(200).json(result);
+
+    } catch (error) {
+        console.error('SDR Lookup Error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+}
     // Check tables
     async checkTables(req, res) {
         try {
