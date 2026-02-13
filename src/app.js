@@ -6,6 +6,7 @@ const path = require('path');
 require('dotenv').config();
 
 const cdrRoutes = require('./routes/cdrRoutes');
+const sdrRoutes = require('./routes/sdrRoutes');
 const { createTables } = require('./config/database');
 
 const app = express();
@@ -22,6 +23,7 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Routes
 app.use('/api/cdr', cdrRoutes);
+app.use('/api/sdr', sdrRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
