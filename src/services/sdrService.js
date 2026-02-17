@@ -308,6 +308,10 @@ class SDRService {
                     lbsData.latitude,
                     lbsData.longitude,
                     lbsData.location_time,
+
+
+
+        
                     lbsData.cgi,
                     lbsData.vlr,
                     lbsData.request_id,
