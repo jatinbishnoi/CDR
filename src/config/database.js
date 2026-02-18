@@ -1,5 +1,6 @@
 const mysql = require('mysql2');
 
+
 // Create a connection for administrative tasks (without database selected)
 const adminPool = mysql.createPool({
     host: process.env.DB_HOST,
@@ -32,10 +33,10 @@ async function initializePools() {
     // Ensure databases exist
     const cdrDbName = process.env.CDR_DB_NAME || 'cdr_analysis';
     const sdrDbName = process.env.SDR_DB_NAME || 'sdr_database';
-    
+
     await ensureDatabase(cdrDbName);
     await ensureDatabase(sdrDbName);
-    
+
     // Create CDR pool
     cdrPool = mysql.createPool({
         host: process.env.DB_HOST,
@@ -48,7 +49,7 @@ async function initializePools() {
         enableKeepAlive: true,
         keepAliveInitialDelay: 0
     });
-    
+
     // Create SDR pool
     sdrPool = mysql.createPool({
         host: process.env.DB_HOST,
@@ -61,12 +62,12 @@ async function initializePools() {
         enableKeepAlive: true,
         keepAliveInitialDelay: 0
     });
-    
+
     promiseCdrPool = cdrPool.promise();
     promiseSdrPool = sdrPool.promise();
-    
+
     console.log('Database pools initialized successfully');
-    
+
     return { promiseCdrPool, promiseSdrPool };
 }
 
@@ -292,6 +293,66 @@ const createSdrTables = async () => {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         `);
 
+        // Create users table for authentication
+        await promiseSdrPool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                email VARCHAR(100) UNIQUE NOT NULL,
+                password VARCHAR(255) NOT NULL,
+                full_name VARCHAR(100),
+                role ENUM('admin', 'data_entry', 'viewer') DEFAULT 'viewer',
+                is_active BOOLEAN DEFAULT true,
+                last_login TIMESTAMP NULL,
+                created_by INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                INDEX idx_role (role),
+                INDEX idx_username (username)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        `);
+
+        // Create sessions table for token management
+        await promiseSdrPool.query(`
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                token VARCHAR(500) NOT NULL,
+                device_info TEXT,
+                ip_address VARCHAR(45),
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                INDEX idx_token (token),
+                INDEX idx_expires (expires_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        `);
+
+        // Create permissions table
+        await promiseSdrPool.query(`
+            CREATE TABLE IF NOT EXISTS role_permissions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                role ENUM('admin', 'data_entry', 'viewer') NOT NULL,
+                permission VARCHAR(100) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_role_permission (role, permission)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        `);
+
+        // Insert default permissions
+        await promiseSdrPool.query(`
+            INSERT IGNORE INTO role_permissions (role, permission) VALUES
+            ('admin', 'all_access'),
+            ('admin', 'user_manage'),
+            ('admin', 'data_import'),
+            ('admin', 'data_view'),
+            ('admin', 'data_export'),
+            ('data_entry', 'data_import'),
+            ('data_entry', 'data_view'),
+            ('viewer', 'data_view')
+        `);
+
         console.log('SDR database tables created/verified successfully');
     } catch (error) {
         console.error('Error creating SDR tables:', error);
@@ -304,12 +365,12 @@ const createTables = async () => {
     try {
         // First initialize pools and ensure databases exist
         await initializePools();
-        
+
         // Then create tables
         await createCdrTables();
         await createSdrTables();
         console.log('All database tables created successfully');
-        
+
         return { promiseCdrPool, promiseSdrPool };
     } catch (error) {
         console.error('Error creating tables:', error);
@@ -318,7 +379,7 @@ const createTables = async () => {
 };
 
 // Export all the functions and pools
-module.exports = { 
+module.exports = {
     getPools,
     createTables,
     initializePools,
