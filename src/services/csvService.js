@@ -1,8 +1,20 @@
 const fs = require('fs');
 const csv = require('csv-parser');
-const { promisePool } = require('../config/database');
+const { getPools } = require('../config/database');
 
 class CSVService {
+    
+    constructor() {
+        this.pools = null;
+    }
+
+    async initPools() {
+        if (!this.pools) {
+            this.pools = await getPools();
+        }
+        return this.pools;
+    }
+
     // Process and store CDR data from CSV
     async processCDRFile(filePath) {
         const results = [];
@@ -12,7 +24,6 @@ class CSVService {
             fs.createReadStream(filePath)
                 .pipe(csv({
                     mapValues: ({ header, index, value }) => {
-                        // Trim whitespace from all values
                         return value ? value.toString().trim() : '';
                     }
                 }))
@@ -71,22 +82,18 @@ class CSVService {
         });
     }
 
-    // Map CSV columns to CDR format with strict validation
+    // Map CSV columns to CDR format
     mapCSVToCDR(data) {
-        // Create a clean copy with lowercase keys and remove any NaN or undefined
         const record = {};
         Object.keys(data).forEach(key => {
             const cleanKey = key ? key.toString().toLowerCase().trim() : '';
             const value = data[key];
-            // Skip NaN, undefined, null, and empty strings
             if (value && value !== 'NaN' && value !== 'undefined' && value !== 'null') {
                 record[cleanKey] = value.toString().trim();
             }
         });
 
-        console.log('Processing record:', record);
-
-        // Extract caller number - try multiple possible column names
+        // Extract caller number
         let callerNumber = null;
         const callerCandidates = ['caller', 'caller_number', 'from', 'source', 'calling_party', 'a_party'];
         for (const candidate of callerCandidates) {
@@ -112,7 +119,7 @@ class CSVService {
             return null;
         }
 
-        // Extract and validate duration
+        // Extract duration
         let duration = 0;
         const durationCandidates = ['duration', 'call_duration', 'seconds', 'billsec', 'call_duration_sec'];
         for (const candidate of durationCandidates) {
@@ -126,40 +133,12 @@ class CSVService {
         }
 
         // Extract date
-        let callDate = null;
-        const dateCandidates = ['date', 'call_date', 'calldate', 'start_date'];
-        for (const candidate of dateCandidates) {
-            if (record[candidate] && record[candidate] !== '') {
-                const formatted = this.formatDate(record[candidate]);
-                if (formatted) {
-                    callDate = formatted;
-                    break;
-                }
-            }
-        }
-        // Use current date if no valid date found
-        if (!callDate) {
-            callDate = this.getCurrentDate();
-        }
+        let callDate = this.formatDate(record['date'] || record['call_date'] || record['calldate'] || this.getCurrentDate());
 
         // Extract time
-        let callTime = null;
-        const timeCandidates = ['time', 'call_time', 'start_time'];
-        for (const candidate of timeCandidates) {
-            if (record[candidate] && record[candidate] !== '') {
-                const formatted = this.formatTime(record[candidate]);
-                if (formatted) {
-                    callTime = formatted;
-                    break;
-                }
-            }
-        }
-        // Use current time if no valid time found
-        if (!callTime) {
-            callTime = this.getCurrentTime();
-        }
+        let callTime = this.formatTime(record['time'] || record['call_time'] || record['start_time'] || this.getCurrentTime());
 
-        // Extract and normalize call type
+        // Extract call type
         let callType = 'outgoing';
         const typeCandidates = ['type', 'call_type', 'direction'];
         for (const candidate of typeCandidates) {
@@ -176,12 +155,11 @@ class CSVService {
             }
         }
 
-        // Extract location data
+        // Extract location
         let locationLat = null;
         let locationLng = null;
         let locationName = null;
 
-        // Try to get location name
         const locationCandidates = ['location', 'location_name', 'city', 'place'];
         for (const candidate of locationCandidates) {
             if (record[candidate] && record[candidate] !== '') {
@@ -190,7 +168,6 @@ class CSVService {
             }
         }
 
-        // Try to get latitude
         const latCandidates = ['latitude', 'lat', 'location_lat'];
         for (const candidate of latCandidates) {
             if (record[candidate] && record[candidate] !== '') {
@@ -202,7 +179,6 @@ class CSVService {
             }
         }
 
-        // Try to get longitude
         const lngCandidates = ['longitude', 'lng', 'location_lng', 'lon'];
         for (const candidate of lngCandidates) {
             if (record[candidate] && record[candidate] !== '') {
@@ -214,7 +190,7 @@ class CSVService {
             }
         }
 
-        // Generate dummy coordinates for locations if we have location name but no coordinates
+        // Generate dummy coordinates if we have location name but no coordinates
         if (locationName && !locationLat && !locationLng) {
             const dummyCoords = this.getDummyCoordinates(locationName);
             locationLat = dummyCoords.lat;
@@ -234,18 +210,16 @@ class CSVService {
         };
     }
 
-    // Sanitize phone number - remove non-numeric characters but keep +
+    // Sanitize phone number
     sanitizePhoneNumber(number) {
         if (!number) return '';
-        // Keep only digits and plus sign
         return number.toString().replace(/[^\d+]/g, '');
     }
 
-    // Get dummy coordinates for common cities
+    // Get dummy coordinates for cities
     getDummyCoordinates(cityName) {
         const city = cityName.toLowerCase();
         
-        // Dummy coordinates for common cities
         const coordinates = {
             'new york': { lat: 40.7128, lng: -74.0060 },
             'los angeles': { lat: 34.0522, lng: -118.2437 },
@@ -254,24 +228,15 @@ class CSVService {
             'miami': { lat: 25.7617, lng: -80.1918 },
             'seattle': { lat: 47.6062, lng: -122.3321 },
             'denver': { lat: 39.7392, lng: -104.9903 },
-            'san francisco': { lat: 37.7749, lng: -122.4194 },
-            'washington': { lat: 38.9072, lng: -77.0369 },
-            'dallas': { lat: 32.7767, lng: -96.7970 },
-            'houston': { lat: 29.7604, lng: -95.3698 },
-            'philadelphia': { lat: 39.9526, lng: -75.1652 },
-            'phoenix': { lat: 33.4484, lng: -112.0740 },
-            'san antonio': { lat: 29.4241, lng: -98.4936 },
-            'san diego': { lat: 32.7157, lng: -117.1611 }
+            'san francisco': { lat: 37.7749, lng: -122.4194 }
         };
 
-        // Check if we have coordinates for this city
         for (const [key, coords] of Object.entries(coordinates)) {
             if (city.includes(key)) {
                 return coords;
             }
         }
 
-        // Default random coordinates in US
         return {
             lat: 37.0902 + (Math.random() - 0.5) * 10,
             lng: -95.7129 + (Math.random() - 0.5) * 20
@@ -280,18 +245,14 @@ class CSVService {
 
     // Format date to YYYY-MM-DD
     formatDate(date) {
-        if (!date) return null;
+        if (!date) return this.getCurrentDate();
         
         try {
-            // Remove any time part if present
             const dateStr = date.toString().split(' ')[0];
-            
-            // Check if it's already in YYYY-MM-DD format
             if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
                 return dateStr;
             }
             
-            // Try to parse as Date object
             const d = new Date(dateStr);
             if (!isNaN(d.getTime())) {
                 return d.toISOString().split('T')[0];
@@ -300,27 +261,24 @@ class CSVService {
             console.log('Date parsing error:', e.message);
         }
         
-        return null;
+        return this.getCurrentDate();
     }
 
     // Format time to HH:MM:SS
     formatTime(time) {
-        if (!time) return null;
+        if (!time) return this.getCurrentTime();
         
         try {
             const timeStr = time.toString().trim();
             
-            // If it's already in HH:MM:SS format
             if (timeStr.match(/^\d{2}:\d{2}:\d{2}$/)) {
                 return timeStr;
             }
             
-            // If it's in HH:MM format
             if (timeStr.match(/^\d{2}:\d{2}$/)) {
                 return timeStr + ':00';
             }
             
-            // Try to extract time from datetime string
             if (timeStr.includes(' ')) {
                 const parts = timeStr.split(' ');
                 for (const part of parts) {
@@ -333,18 +291,19 @@ class CSVService {
             console.log('Time parsing error:', e.message);
         }
         
-        return null;
+        return this.getCurrentTime();
     }
 
     // Store CDR data in database
     async storeCDRData(records) {
-        const connection = await promisePool.getConnection();
+        const pools = await this.initPools();
+        const promiseCdrPool = pools.promiseCdrPool;
+        const connection = await promiseCdrPool.getConnection();
         
         try {
             await connection.beginTransaction();
 
             for (const record of records) {
-                // Insert CDR record
                 await connection.query(
                     `INSERT INTO cdr_records 
                     (caller_number, receiver_number, call_duration, call_date, call_time, call_type, location_lat, location_lng, location_name) 
@@ -364,7 +323,7 @@ class CSVService {
             }
 
             await connection.commit();
-            console.log(`Successfully stored ${records.length} records`);
+            console.log(`Successfully stored ${records.length} records in CDR database`);
         } catch (error) {
             await connection.rollback();
             console.error('Error storing records:', error);
@@ -376,52 +335,71 @@ class CSVService {
 
     // Update analysis tables
     async updateAnalysis() {
-        await this.updateContactsAnalysis();
-        await this.updateRelationshipsAnalysis();
+        const pools = await this.initPools();
+        const promiseCdrPool = pools.promiseCdrPool;
+        
+        await this.updateContactsAnalysis(promiseCdrPool);
+        await this.updateRelationshipsAnalysis(promiseCdrPool);
         console.log('Analysis tables updated successfully');
     }
 
     // Update contacts statistics
-    async updateContactsAnalysis() {
+    async updateContactsAnalysis(promiseCdrPool) {
         const query = `
             INSERT INTO contacts (phone_number, total_calls, total_duration, 
                                 incoming_calls, outgoing_calls, missed_calls, 
                                 avg_call_duration, last_call_date)
             SELECT 
                 phone_number,
-                COUNT(*) as total_calls,
-                SUM(call_duration) as total_duration,
-                SUM(CASE WHEN call_type = 'incoming' THEN 1 ELSE 0 END) as incoming_calls,
-                SUM(CASE WHEN call_type = 'outgoing' THEN 1 ELSE 0 END) as outgoing_calls,
-                SUM(CASE WHEN call_type = 'missed' THEN 1 ELSE 0 END) as missed_calls,
-                AVG(call_duration) as avg_call_duration,
-                MAX(call_date) as last_call_date
+                SUM(call_count) as total_calls,
+                SUM(total_duration) as total_duration,
+                SUM(incoming_count) as incoming_calls,
+                SUM(outgoing_count) as outgoing_calls,
+                SUM(missed_count) as missed_calls,
+                AVG(avg_duration) as avg_call_duration,
+                MAX(max_date) as last_call_date
             FROM (
-                SELECT caller_number as phone_number, call_duration, call_type, call_date FROM cdr_records
+                SELECT 
+                    caller_number as phone_number,
+                    COUNT(*) as call_count,
+                    SUM(call_duration) as total_duration,
+                    SUM(CASE WHEN call_type = 'incoming' THEN 1 ELSE 0 END) as incoming_count,
+                    SUM(CASE WHEN call_type = 'outgoing' THEN 1 ELSE 0 END) as outgoing_count,
+                    SUM(CASE WHEN call_type = 'missed' THEN 1 ELSE 0 END) as missed_count,
+                    AVG(call_duration) as avg_duration,
+                    MAX(call_date) as max_date
+                FROM cdr_records
+                GROUP BY caller_number
                 UNION ALL
-                SELECT receiver_number as phone_number, call_duration, 
-                       CASE WHEN call_type = 'outgoing' THEN 'incoming' 
-                            WHEN call_type = 'incoming' THEN 'outgoing' 
-                            ELSE call_type END, 
-                       call_date FROM cdr_records
+                SELECT 
+                    receiver_number as phone_number,
+                    COUNT(*) as call_count,
+                    SUM(call_duration) as total_duration,
+                    SUM(CASE WHEN call_type = 'outgoing' THEN 1 ELSE 0 END) as incoming_count,
+                    SUM(CASE WHEN call_type = 'incoming' THEN 1 ELSE 0 END) as outgoing_count,
+                    SUM(CASE WHEN call_type = 'missed' THEN 1 ELSE 0 END) as missed_count,
+                    AVG(call_duration) as avg_duration,
+                    MAX(call_date) as max_date
+                FROM cdr_records
+                GROUP BY receiver_number
             ) all_calls
             GROUP BY phone_number
             ON DUPLICATE KEY UPDATE
-                total_calls = VALUES(total_calls),
-                total_duration = VALUES(total_duration),
-                incoming_calls = VALUES(incoming_calls),
-                outgoing_calls = VALUES(outgoing_calls),
-                missed_calls = VALUES(missed_calls),
-                avg_call_duration = VALUES(avg_call_duration),
-                last_call_date = VALUES(last_call_date),
+                total_calls = contacts.total_calls + VALUES(total_calls),
+                total_duration = contacts.total_duration + VALUES(total_duration),
+                incoming_calls = contacts.incoming_calls + VALUES(incoming_calls),
+                outgoing_calls = contacts.outgoing_calls + VALUES(outgoing_calls),
+                missed_calls = contacts.missed_calls + VALUES(missed_calls),
+                avg_call_duration = (contacts.total_duration + VALUES(total_duration)) / (contacts.total_calls + VALUES(total_calls)),
+                last_call_date = GREATEST(contacts.last_call_date, VALUES(last_call_date)),
                 updated_at = CURRENT_TIMESTAMP
         `;
         
-        await promisePool.query(query);
+        await promiseCdrPool.query(query);
     }
 
     // Update call relationships
-    async updateRelationshipsAnalysis() {
+    async updateRelationshipsAnalysis(promiseCdrPool) {
         const query = `
             INSERT INTO call_relationships (caller_number, receiver_number, call_count, 
                                           total_duration, first_call_date, last_call_date)
@@ -435,13 +413,13 @@ class CSVService {
             FROM cdr_records
             GROUP BY caller_number, receiver_number
             ON DUPLICATE KEY UPDATE
-                call_count = VALUES(call_count),
-                total_duration = VALUES(total_duration),
-                first_call_date = VALUES(first_call_date),
-                last_call_date = VALUES(last_call_date)
+                call_count = call_count + VALUES(call_count),
+                total_duration = total_duration + VALUES(total_duration),
+                first_call_date = LEAST(first_call_date, VALUES(first_call_date)),
+                last_call_date = GREATEST(last_call_date, VALUES(last_call_date))
         `;
         
-        await promisePool.query(query);
+        await promiseCdrPool.query(query);
     }
 
     getCurrentDate() {
