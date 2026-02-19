@@ -3,12 +3,21 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const sdrController = require('../controllers/sdrController');
-const { authorize } = require('../middlewares/authMiddleware');
+const { authenticate, authorize } = require('../middlewares/authMiddleware');
+
 const router = express.Router();
 
-const ADMIN = 'admin';
-const ADMIN_DATA_ENTRY = 'data_entry' || 'admin';
-const ALL = 'viewer'||'data_entry'||'admin';
+// Define roles properly
+const ROLES = {
+    ADMIN: 'admin',
+    DATA_ENTRY: 'data_entry' || 'admin',
+    VIEWER: 'viewer' || 'data_entry' || 'admin',
+};
+
+// Role combinations
+const ADMIN_ONLY = [ROLES.ADMIN];
+const DATA_ENTRY_ADMIN = [ROLES.ADMIN, ROLES.DATA_ENTRY];
+const ALL_ROLES = [ROLES.ADMIN, ROLES.DATA_ENTRY, ROLES.VIEWER];
 
 // Ensure upload directory exists
 const uploadDir = path.join(__dirname, '../uploads/sdr');
@@ -41,8 +50,11 @@ const upload = multer({
     }
 });
 
-// Debug route - make sure this controller method exists
-router.post('/debug-import', authorize(ADMIN_DATA_ENTRY),upload.single('file'), (req, res) => {
+// Apply authentication to all routes
+router.use(authenticate);
+
+// Debug route
+router.post('/debug-import', authorize(DATA_ENTRY_ADMIN), upload.single('file'), (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No file uploaded' });
@@ -58,27 +70,42 @@ router.post('/debug-import', authorize(ADMIN_DATA_ENTRY),upload.single('file'), 
     }
 });
 
-// LBS Processing
-router.post('/lbs/process', sdrController.processLBS);
+// LBS Processing - accessible by admin and data entry
+router.post('/lbs/process', authorize(DATA_ENTRY_ADMIN), sdrController.processLBS);
 
 // SDR Management
 router.post('/import', 
-    authorize(ADMIN_DATA_ENTRY), upload.single('file'), sdrController.importSDR);
+    authorize(ADMIN_ONLY), 
+    upload.single('file'), 
+    sdrController.importSDR
+);
+
 // LBS to SDR Lookup
-router.post('/lbs/lookup', authorize(ADMIN_DATA_ENTRY), sdrController.lookupSDRFromLBS);
+router.post('/lbs/lookup', 
+    authorize(DATA_ENTRY_ADMIN), 
+    sdrController.lookupSDRFromLBS
+);
+
 // LBS Components Lookup
-router.post('/lbs/lookup-components', authorize(ADMIN_DATA_ENTRY), sdrController.lookupSDRByComponents);
-router.get('/search', authorize(ADMIN_DATA_ENTRY), sdrController.searchSDR);
-router.get('/all', authorize(ADMIN_DATA_ENTRY), sdrController.getAllSDR);
-router.get('/mobile/:mobile', authorize(ADMIN_DATA_ENTRY), sdrController.getByMobile);
-router.get('/details/:mobile', authorize(ADMIN_DATA_ENTRY), sdrController.getCompleteSDRDetails);
-router.get('/location/:mobile', authorize(ADMIN_DATA_ENTRY), sdrController.getLocationHistory);
-router.get('/stats', authorize(ADMIN_DATA_ENTRY), sdrController.getStats);
-router.get('/stats/detailed', authorize(ADMIN_DATA_ENTRY), sdrController.getDetailedSDRStats);
-router.get('/lbs/recent', authorize(ADMIN_DATA_ENTRY), sdrController.getRecentLBS);
-router.get('/check-tables', authorize(ADMIN_DATA_ENTRY), sdrController.checkTables);
-router.get('/filter', authorize(ADMIN_DATA_ENTRY), sdrController.getSDRWithFilters);
-router.post('/test-insert', authorize(ADMIN_DATA_ENTRY), sdrController.testInsert);
-router.get('/test-db', authorize(ADMIN_DATA_ENTRY), sdrController.testDb);
+router.post('/lbs/lookup-components', 
+    authorize(DATA_ENTRY_ADMIN), 
+    sdrController.lookupSDRByComponents
+);
+
+// Search routes - accessible by all authenticated users
+router.get('/search', authorize(ALL_ROLES), sdrController.searchSDR);
+router.get('/all', authorize(ALL_ROLES), sdrController.getAllSDR);
+router.get('/mobile/:mobile', authorize(ALL_ROLES), sdrController.getByMobile);
+router.get('/details/:mobile', authorize(ALL_ROLES), sdrController.getCompleteSDRDetails);
+router.get('/location/:mobile', authorize(ALL_ROLES), sdrController.getLocationHistory);
+router.get('/stats', authorize(ALL_ROLES), sdrController.getStats);
+router.get('/stats/detailed', authorize(ALL_ROLES), sdrController.getDetailedSDRStats);
+router.get('/lbs/recent', authorize(ALL_ROLES), sdrController.getRecentLBS);
+router.get('/check-tables', authorize(ALL_ROLES), sdrController.checkTables);
+router.get('/filter', authorize(ALL_ROLES), sdrController.getSDRWithFilters);
+
+// Test routes - admin only
+router.post('/test-insert', authorize(ADMIN_ONLY), sdrController.testInsert);
+router.get('/test-db', authorize(ALL_ROLES), sdrController.testDb);
 
 module.exports = router;
